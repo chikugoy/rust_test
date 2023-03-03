@@ -1,0 +1,25 @@
+[package]
+name = "procedure"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+aws-config = "0.54.1"
+aws-sdk-s3 = "0.24.0"
+aws-smithy-http = "0.54.4"
+chrono = "0.4"
+csv = "1.2.0"
+diesel = { version = "2.0.0", features = ["postgres", "chrono", "serde_json"] }
+dotenvy = "0.15"
+serde_json = "1.0.93"
+thousands = "0.2.0"
+tokio = { version = "1.26.0", features = ["rt-multi-thread", "macros", "io-util"] }
+
+[[bin]]
+name = "main"
+doc = false
+
+[lib]
+doc = false
