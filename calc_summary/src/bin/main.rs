@@ -84,7 +84,7 @@ fn make_cache(target_dates: [&str;12], calculated_cache: &mut Calculated, record
         let target_unit_id = if !rec.unit_id.is_none() { rec.unit_id.expect("").to_string() } else { "".to_string() };
         let aukey = target_account_id.to_string() + &"-".to_string() + &target_unit_id.to_string();
 
-        if !record_cache.has("account_unit".to_string(), row_date.to_string(), aukey.to_string()) {
+        if !record_cache.has::<Vec<AnyMap>>("account_unit".to_string(), row_date.to_string(), aukey.to_string()) {
             let mut account_unit_data = AnyMap::new();
             account_unit_data.set("budget_id".to_string(), i64::from(-1));
             account_unit_data.set("date".to_string(), rec.date);
@@ -141,7 +141,7 @@ fn make_cache(target_dates: [&str;12], calculated_cache: &mut Calculated, record
     for rec in results {
         for profit_id in rec.profit_id_array.clone().unwrap().as_array().unwrap() {
             for target_date in target_dates {
-                if !record_cache.has("profit".to_string(), target_date.to_string(), profit_id.to_string()) {
+                if !record_cache.has::<Vec<AnyMap>>("profit".to_string(), target_date.to_string(), profit_id.to_string()) {
                     record_cache.set::<Vec<AnyMap>>("profit".to_string(), target_date.to_string(), profit_id.to_string(), vec![]);
                 }
                 let target_row = record_cache.get_mut::<Vec<AnyMap>>("profit".to_string(), target_date.to_string(), profit_id.to_string()).unwrap();
@@ -157,7 +157,7 @@ fn make_cache(target_dates: [&str;12], calculated_cache: &mut Calculated, record
 
         for group_id in rec.group_id_array.clone().unwrap().as_array().unwrap() {
             for target_date in target_dates {
-                if !record_cache.has("group".to_string(), target_date.to_string(), group_id.to_string()) {
+                if !record_cache.has::<Vec<AnyMap>>("group".to_string(), target_date.to_string(), group_id.to_string()) {
                     record_cache.set::<Vec<AnyMap>>("group".to_string(), target_date.to_string(), group_id.to_string(), vec![]);
                 }
                 let target_row = record_cache.get_mut::<Vec<AnyMap>>("group".to_string(), target_date.to_string(), group_id.to_string()).unwrap();
@@ -175,7 +175,7 @@ fn make_cache(target_dates: [&str;12], calculated_cache: &mut Calculated, record
         let target_account_id = if !rec.account_id.is_none() { rec.account_id.unwrap().to_string() } else { "".to_string() };
 
         for target_date in target_dates {
-            if !record_cache.has("category".to_string(), target_date.to_string(), target_category_id.to_string()) {
+            if !record_cache.has::<Vec<AnyMap>>("category".to_string(), target_date.to_string(), target_category_id.to_string()) {
                 record_cache.set::<Vec<AnyMap>>("category".to_string(), target_date.to_string(), target_category_id.to_string(), vec![]);
             }
             let target_row = record_cache.get_mut::<Vec<AnyMap>>("category".to_string(), target_date.to_string(), target_category_id.to_string()).unwrap();
@@ -224,5 +224,5 @@ fn main() {
 
     make_cache(target_dates, &mut calculated_cache, &mut record_cache);
 
-    record_cache.each_uncalculated()
+    // record_cache.each_uncalculated()
 }
