@@ -14,3 +14,17 @@ pub struct Pav {
     pub updated_at: NaiveDateTime,
     pub owner_id: Option<i64>,
 }
+
+#[derive(Queryable)]
+#[diesel(table_name = pavs_insert_test)]
+pub struct PavInsertTest {
+    pub id: i64,
+    pub target_type: String,
+    pub target_id: i64,
+    pub date: NaiveDate,
+    pub value: f64,
+    pub other_values: serde_json::Value,
+    pub created_at: NaiveDateTime,
+    pub updated_at: NaiveDateTime,
+    pub owner_id: Option<i64>,
+}
