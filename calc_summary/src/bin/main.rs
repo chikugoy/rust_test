@@ -1,22 +1,206 @@
 extern crate diesel;
 
-use csv;
-use std::error::Error;
-use std::time::Instant;
-use std::path::Path;
-use std::collections::HashMap;
-use std::any::*;
-
 use diesel::prelude::*;
 use thousands::Separable;
-use aws_config::meta::region::RegionProviderChain;
-use aws_smithy_http::byte_stream::ByteStream;
 
 use self::models::*;
 use self::any_map::*;
+use self::calculated_cache::*;
+use self::record_cache::*;
 use calc_summary::*;
 
-fn get_generate_cache() -> AnyMap {
+fn make_cache(target_dates: [&str;12], calculated_cache: &mut Calculated, record_cache: &mut Records) {
+    let mut budget_row = AnyMap::generate_cache();
+
+    println!("START cache row");
+
+    use self::schema::tmp_row_pavs::dsl::*;
+    use self::schema::tmp_budget_pavs::dsl::*;
+    use self::schema::tmp_accounts::dsl::*;
+    let connection = &mut establish_connection();
+
+    let results = tmp_row_pavs
+        .load::<TmpRowPav>(connection)
+        .expect("Error loading tmp row pavs");
+    println!("tmp row pavs count {}", results.len().separate_with_commas());
+
+    for rec in results {
+        let row_date: &String = &rec.date.format("%Y-%m-%d").to_string();
+        let target_budget_id = if !rec.budget_id.is_none() { rec.budget_id.expect("").to_string() } else { "".to_string() };
+
+        if !budget_row.get::<AnyMap>(row_date.to_string()).unwrap().has::<AnyMap>(target_budget_id.clone()) {
+            // FIXME: 冗長なので改善したい
+            let mut budget_row_data = AnyMap::new();
+            budget_row_data.set("row_id".to_string(), i64::from(-1));
+            budget_row_data.set("date".to_string(), rec.date);
+            budget_row_data.set("value".to_string(), f64::from(0));
+            budget_row_data.set("calculated".to_string(), true);
+            budget_row.get_mut::<AnyMap>(row_date.to_string()).unwrap().set::<Vec<AnyMap>>(target_budget_id.clone(), vec![budget_row_data]);
+
+            if rec.calculated.unwrap() {
+                calculated_cache.set::<f64>("row".to_string(), row_date.to_string(), rec.row_id.to_string(), rec.value.unwrap());
+                if !rec.is_not_aggregate.unwrap() {
+                    let target_row = budget_row.get_mut::<AnyMap>(row_date.to_string()).unwrap().get_mut::<Vec<AnyMap>>(target_budget_id.clone()).unwrap();
+                    let calced_add = calc::add(&target_row[0].get::<f64>("value".to_string()).unwrap(), &rec.value.unwrap());
+                    target_row[0].set::<f64>("value".to_string(), calced_add)
+                }
+            } else {
+                if !rec.is_not_aggregate.unwrap() {
+                    let mut budget_row_data = AnyMap::new();
+                    budget_row_data.set("row_id".to_string(), rec.row_id);
+                    budget_row_data.set("date".to_string(), rec.date);
+                    budget_row_data.set("value".to_string(), rec.value.unwrap());
+                    budget_row_data.set("calculated".to_string(), rec.calculated.unwrap());
+
+                    let target_row = budget_row.get_mut::<AnyMap>(row_date.to_string()).unwrap().get_mut::<Vec<AnyMap>>(target_budget_id.clone()).unwrap();
+                    target_row.push(budget_row_data);
+                }
+                let mut row_data = AnyMap::new();
+                row_data.set("row_id".to_string(), rec.row_id);
+                row_data.set("date".to_string(), rec.date);
+                row_data.set("value".to_string(), rec.value.unwrap());
+                row_data.set("calculated".to_string(), rec.calculated.unwrap());
+
+                record_cache.set::<AnyMap>("row".to_string(), row_date.to_string(), rec.row_id.to_string(), row_data);
+            }
+        }
+    }
+
+    println!("FINISH cache row");
+
+    // println!("{}", row_date.to_string());
+    // println!("{}", target_budget_id.clone());
+
+    println!("START cache budget");
+
+    let results = tmp_budget_pavs
+        .load::<TmpBudgetPav>(connection)
+        .expect("Error loading tmp row budgets");
+    println!("tmp row budgets count {}", results.len().separate_with_commas());
+
+    for rec in results {
+        let row_date: &String = &rec.date.format("%Y-%m-%d").to_string();
+        let target_account_id = if !rec.account_id.is_none() { rec.account_id.expect("").to_string() } else { "".to_string() };
+        let target_unit_id = if !rec.unit_id.is_none() { rec.unit_id.expect("").to_string() } else { "".to_string() };
+        let aukey = target_account_id.to_string() + &"-".to_string() + &target_unit_id.to_string();
+
+        if !record_cache.has("account_unit".to_string(), row_date.to_string(), aukey.to_string()) {
+            let mut account_unit_data = AnyMap::new();
+            account_unit_data.set("budget_id".to_string(), i64::from(-1));
+            account_unit_data.set("date".to_string(), rec.date);
+            account_unit_data.set("value".to_string(), f64::from(0));
+            account_unit_data.set("budget".to_string(), f64::from(0));
+            account_unit_data.set("forecast".to_string(), f64::from(0));
+            account_unit_data.set("achievement".to_string(), f64::from(0));
+            account_unit_data.set("calculated".to_string(), true);
+            record_cache.set::<Vec<AnyMap>>("account_unit".to_string(), row_date.to_string(), aukey.to_string(), vec![account_unit_data]);
+        }
+
+        let target_value = if rec.budget.is_none() { rec.forecast.unwrap() } else { rec.budget.unwrap() };
+
+        if rec.calculated.unwrap() {
+            calculated_cache.set::<f64>("budget".to_string(), row_date.to_string(), rec.budget_id.to_string(), target_value.clone());
+
+            let target_row = record_cache.get_mut::<Vec<AnyMap>>("account_unit".to_string(), row_date.to_string(), aukey.to_string()).unwrap();
+            let calced_add = calc::add(target_row[0].get::<f64>("value".to_string()).unwrap(), &target_value.clone());
+            target_row[0].set::<f64>("value".to_string(), calced_add);
+        } else {
+            let mut account_unit_data = AnyMap::new();
+            account_unit_data.set("budget_id".to_string(), rec.budget_id);
+            account_unit_data.set("date".to_string(), rec.date);
+            account_unit_data.set("budget".to_string(), rec.budget);
+            account_unit_data.set("forecast".to_string(), rec.forecast);
+            account_unit_data.set("achievement".to_string(), rec.achievement);
+            account_unit_data.set("calculated".to_string(), rec.calculated);
+            let target_row = record_cache.get_mut::<Vec<AnyMap>>("account_unit".to_string(), row_date.to_string(), aukey.to_string()).unwrap();
+            target_row.push(account_unit_data);
+
+            // let rows = budget_row.get::<AnyMap>(row_date.to_string()).unwrap().get::<Vec<AnyMap>>(rec.budget_id.to_string()).unwrap();
+            let mut budget_data = AnyMap::new();
+            budget_data.set("budget_id".to_string(), rec.budget_id);
+            budget_data.set("date".to_string(), rec.date);
+            budget_data.set("budget".to_string(), rec.budget);
+            budget_data.set("forecast".to_string(), rec.forecast);
+            budget_data.set("achievement".to_string(), rec.achievement);
+            budget_data.set("calculated".to_string(), rec.calculated);
+            // budget_data.set("rows".to_string(), rows.clone());
+            record_cache.set::<AnyMap>("budget".to_string(), row_date.to_string(), rec.budget_id.to_string(), budget_data);
+        }
+        break;
+    }
+
+    println!("FINISH cache budget");
+
+    println!("START cache account");
+
+    let results = tmp_accounts
+        .load::<TmpAccount>(connection)
+        .expect("Error loading tmp row accounts");
+    println!("tmp row accounts count {}", results.len().separate_with_commas());
+
+    for rec in results {
+        for profit_id in rec.profit_id_array.clone().unwrap().as_array().unwrap() {
+            for target_date in target_dates {
+                if !record_cache.has("profit".to_string(), target_date.to_string(), profit_id.to_string()) {
+                    record_cache.set::<Vec<AnyMap>>("profit".to_string(), target_date.to_string(), profit_id.to_string(), vec![]);
+                }
+                let target_row = record_cache.get_mut::<Vec<AnyMap>>("profit".to_string(), target_date.to_string(), profit_id.to_string()).unwrap();
+                let mut account_data = AnyMap::new();
+                account_data.set("account_id".to_string(), rec.account_id);
+                account_data.set("category_id".to_string(), rec.category_id);
+                account_data.set("coefficient".to_string(), rec.coefficient);
+                account_data.set("group_id_array".to_string(), rec.group_id_array.clone());
+                account_data.set("profit_id_array".to_string(), rec.profit_id_array.clone());
+                target_row.push(account_data);
+            }
+        }
+
+        for group_id in rec.group_id_array.clone().unwrap().as_array().unwrap() {
+            for target_date in target_dates {
+                if !record_cache.has("group".to_string(), target_date.to_string(), group_id.to_string()) {
+                    record_cache.set::<Vec<AnyMap>>("group".to_string(), target_date.to_string(), group_id.to_string(), vec![]);
+                }
+                let target_row = record_cache.get_mut::<Vec<AnyMap>>("group".to_string(), target_date.to_string(), group_id.to_string()).unwrap();
+                let mut account_data = AnyMap::new();
+                account_data.set("account_id".to_string(), rec.account_id);
+                account_data.set("category_id".to_string(), rec.category_id);
+                account_data.set("coefficient".to_string(), rec.coefficient);
+                account_data.set("group_id_array".to_string(), rec.group_id_array.clone());
+                account_data.set("profit_id_array".to_string(), rec.profit_id_array.clone());
+                target_row.push(account_data);
+            }
+        }
+
+        let target_category_id = if !rec.category_id.is_none() { rec.category_id.expect("").to_string() } else { "".to_string() };
+        let target_account_id = if !rec.account_id.is_none() { rec.account_id.unwrap().to_string() } else { "".to_string() };
+
+        for target_date in target_dates {
+            if !record_cache.has("category".to_string(), target_date.to_string(), target_category_id.to_string()) {
+                record_cache.set::<Vec<AnyMap>>("category".to_string(), target_date.to_string(), target_category_id.to_string(), vec![]);
+            }
+            let target_row = record_cache.get_mut::<Vec<AnyMap>>("category".to_string(), target_date.to_string(), target_category_id.to_string()).unwrap();
+            let mut account_data = AnyMap::new();
+            account_data.set("account_id".to_string(), rec.account_id);
+            account_data.set("category_id".to_string(), rec.category_id);
+            account_data.set("coefficient".to_string(), rec.coefficient);
+            account_data.set("group_id_array".to_string(), rec.group_id_array.clone());
+            account_data.set("profit_id_array".to_string(), rec.profit_id_array.clone());
+            target_row.push(account_data);
+
+            let mut account_data = AnyMap::new();
+            account_data.set("account_id".to_string(), rec.account_id);
+            account_data.set("category_id".to_string(), rec.category_id);
+            account_data.set("coefficient".to_string(), rec.coefficient);
+            account_data.set("group_id_array".to_string(), rec.group_id_array.clone());
+            account_data.set("profit_id_array".to_string(), rec.profit_id_array.clone());
+            record_cache.set::<Vec<AnyMap>>("account".to_string(), target_date.to_string(), target_account_id.to_string(), vec![account_data]);
+        }
+    }
+
+    println!("FINISH cache account");
+}
+
+fn main() {
     let target_dates = [
         "2022-04-01",
         "2022-05-01",
@@ -32,204 +216,13 @@ fn get_generate_cache() -> AnyMap {
         "2023-03-01",
     ];
 
-    // FIXME: rustではHashMapにHashMapを入れ子にするようなコードは余り筋がよくないかも
-    // 何でも入るHashMapを実装している人はいたが、安定版ではない features機能を使っている
-    // http://benfalk.com/blog/2022/02/27/rust-hashmap-to-store-anything/
-    let mut generate_cache = AnyMap::new();
-    for v in target_dates.iter() {
-        generate_cache.set(v.to_string(), AnyMap::new());
-    }
+    let mut calculated_cache = Calculated::new();
+    calculated_cache.initialize();
 
-    return generate_cache;
-}
+    let mut record_cache = Records::new();
+    record_cache.initialize();
 
-fn make_cache(generate_cache: &AnyMap) {
-    let mut selects: Vec<String> = vec![];
-    let mut budget_row = generate_cache.clone();
+    make_cache(target_dates, &mut calculated_cache, &mut record_cache);
 
-    println!("START cache row");
-
-    use self::schema::tmp_row_pavs::dsl::*;
-    let connection = &mut establish_connection();
-
-    let results = tmp_row_pavs
-        .load::<TmpRowPav>(connection)
-        .expect("Error loading tmp row pavs");
-    println!("pavs count {}", results.len().separate_with_commas());
-
-    for rec in results {
-        let row_date: &String = &rec.date.format("%Y-%m-%d").to_string();
-        println!("{}", row_date);
-        if !budget_row.get::<AnyMap>(row_date.to_string()).unwrap().has::<AnyMap>(rec.budget_id.expect("").to_string()) {
-            let mut budget_row_data = AnyMap::new();
-            budget_row_data.set("row_id".to_string(), i64::from(-1));
-            budget_row_data.set("date".to_string(), rec.date);
-            budget_row_data.set("calculated".to_string(), true);
-            budget_row.get::<AnyMap>(row_date.to_string()).unwrap().set::<&AnyMap>(rec.budget_id.expect("").to_string(), &mut budget_row_data);
-            // println!("budget_row_data {:?}", budget_row_data);
-            // println!("budget_row {:?}", budget_row);
-        }
-
-        break;
-    }
-
-
-    // pub struct TmpRowPav {
-    //     pub id: i64,
-    //     pub row_id: i64,
-    //     pub budget_id: Option<i64>,
-    //     pub identity_id: Option<i64>,
-    //     pub account_id: Option<Uuid>,
-    //     pub unit_id: Option<i64>,
-    //     pub data_set_id: Option<i64>,
-    //     pub date: NaiveDate,
-    //     pub formula_json: Option<serde_json::Value>,
-    //     pub value: Option<f64>,
-    //     pub calculated: Option<bool>,
-    //     pub is_not_aggregate: Option<bool>,
-    // }
-
-    // selects = [
-    //     'id',
-    //     'row_id',
-    //     'budget_id',
-    //     'unit_id',
-    // 'COALESCE(value, 0.0) AS value',
-    // `TO_CHAR(date, '${DATE_FORMAT}') AS date`,
-    //          'formula_json',
-    //          'is_not_aggregate',
-    //          'calculated',
-    //          ];
-    // for (var r of plv8.execute(`SELECT ${selects.join(',')} FROM tmp_row_pavs`)) {
-    //     var date = r.date;
-    //     if (!budget_row[date].has(r.budget_id)) budget_row[date].set(r.budget_id, [{ row_id: -1, date: date, value: 0.0, calculated: true }]);
-    //
-    //     if (r.calculated) {
-    //         calculated_ids.set('row', date, r.row_id, r.value);
-    //         if (!r.is_not_aggregate) budget_row[date].get(r.budget_id)[0].value = calc.add(budget_row[date].get(r.budget_id)[0].value, r.value);
-    //     } else {
-    //         if (!r.is_not_aggregate) budget_row[date].get(r.budget_id).push(r);
-    //         records.set('row', date, r.row_id, r);
-    //     }
-    // }
-    // logger.print('FINISH cache row');
-    //
-    // logger.print('START cache budget');
-    // selects = [
-    //     'id',
-    //     'budget_id',
-    //     'account_id',
-    //     'unit_id',
-    //     'budget',
-    // 'forecast AS value',
-    // `TO_CHAR(date, '${DATE_FORMAT}') AS date`,
-    //          'calculated',
-    //          ];
-    // for (var r of plv8.execute(`SELECT ${selects.join(',')} FROM tmp_budget_pavs b`)) {
-    //     // 上書き値を考慮した値を取得するseen_outside_valueを定義しておく
-    //     Object.defineProperty(r, 'seen_outside_value', { get: function () { return this.budget === null ? this.value : this.budget; } });
-    //     var date = r.date;
-    //     var aukey = [r.account_id, r.unit_id];
-    //     if (!records.has('account_unit', date, aukey)) records.set('account_unit', date, aukey, [{ budget_id: -1, date: date, value: 0.0, calculated: true }]);
-    //
-    //     if (r.calculated) {
-    //         calculated_ids.set('budget', date, r.budget_id, r.seen_outside_value);
-    //         records.get('account_unit', date, aukey)[0].value = calc.add(records.get('account_unit', date, aukey)[0].value, r.seen_outside_value);
-    //     } else {
-    //         records.get('account_unit', date, aukey).push(r);
-    //         r.rows = budget_row[date].get(r.budget_id);
-    //         records.set('budget', date, r.budget_id, r);
-    //     }
-    // }
-    // logger.print('FINISH cache budget');
-    //
-    // logger.print('START cache account');
-    // for (var r of plv8.execute(`SELECT * FROM tmp_accounts a`)) {
-    //     for (var date of target_dates) {
-    //         for (var p of r.profit_id_array) {
-    //             if (!records.has('profit', date, p)) records.set('profit', date, p, []);
-    //             records.get('profit', date, p).push(r);
-    //         }
-    //         for (var n of r.group_id_array) {
-    //             if (!records.has('group', date, n)) records.set('group', date, n, []);
-    //             records.get('group', date, n).push(r);
-    //         }
-    //         if (!records.has('category', date, r.category_id)) records.set('category', date, r.category_id, []);
-    //         records.get('category', date, r.category_id).push(r);
-    //         records.set('account', date, r.account_id, [r]);
-    //     }
-    // }
-    // logger.print('FINISH cache account');
-
-}
-
-#[tokio::main]
-async fn main() {
-    // use self::schema::pavs::dsl::*;
-    // let connection = &mut establish_connection();
-    //
-    // let mut start = Instant::now();
-    // let results = pavs
-    //     // .filter(owner_id.eq(10))
-    //     // .limit(5)
-    //     .load::<Pav>(connection)
-    //     .expect("Error loading pavs");
-    // let mut end = start.elapsed();
-
-
-    // // vec
-    // let mut vec = vec![];
-    // let d1 = vec![];
-    // let d2 = vec![];
-    //
-    // vec.push(d1);
-    // vec.push(d2);
-    //
-    // vec[0].push(1);
-    // vec[0].push(2);
-    // vec[0].push(3);
-    // vec[1].push(5);
-    // vec[1].push(6);
-    //
-    // println!("d1: {:?}",vec[0]);
-    // println!("d2: {:?}",vec[1]);
-    //
-    // println!("d1[2]:{}",vec[0][2]);
-
-
-    // // hash
-    // let mut calculated_cache = HashMap::new();
-    // let mut calculated_cache_data = HashMap::new();
-    //
-    // calculated_cache_data.insert(String::from("2022-01-01"), String::from("test_data1"));
-    // calculated_cache.insert(String::from("type1"), calculated_cache_data);
-    //
-    // println!("{:?}", calculated_cache);
-    // println!("{:?}", calculated_cache.get(&String::from("type1")).unwrap().get(&String::from("2022-01-01")).unwrap());
-    // _generate_cache.get_mut(&String::from("2022-04-01")).unwrap().insert(String::from("type1"), String::from("type11"));
-
-    let mut generate_cache = get_generate_cache();
-
-    make_cache(&generate_cache);
-
-
-
-
-    //
-    // println!("pavs count {}", results.len().separate_with_commas());
-    // println!("pavs get: {}.{:03}秒", end.as_secs(), end.subsec_nanos() / 1_000_000);
-    //
-    // const PATH: &str = "./output/test.csv";
-    //
-    // start = Instant::now();
-    // if let Err(e) = write_to_csv(PATH, results) {
-    //     eprintln!("{}", e)
-    // }
-    // end = start.elapsed();
-    // println!("csv output: {}.{:03}秒", end.as_secs(), end.subsec_nanos() / 1_000_000);
-    //
-    // start = Instant::now();
-    // upload_to_s3(PATH).await;
-    // end = start.elapsed();
-    // println!("csv s3 upload: {}.{:03}秒", end.as_secs(), end.subsec_nanos() / 1_000_000);
+    record_cache.each_uncalculated()
 }

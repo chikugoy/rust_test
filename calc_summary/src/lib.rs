@@ -1,6 +1,7 @@
 pub mod models;
 pub mod schema;
-pub mod calculated;
+pub mod calculated_cache;
+pub mod record_cache;
 pub mod calc;
 pub mod any_map;
 
@@ -8,8 +9,6 @@ use diesel::pg::PgConnection;
 use diesel::prelude::*;
 use dotenvy::dotenv;
 use std::env;
-use std::any::*;
-
 
 pub fn establish_connection() -> PgConnection {
     dotenv().ok();
