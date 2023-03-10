@@ -1,8 +1,9 @@
 use std::any::*;
 
 use crate::any_map::AnyMap;
+use crate::formula_result::FormulaResults;
 
-type Callback = fn(map: &AnyMap);
+type Callback = fn(depth: i32, rec: &mut AnyMap, formula_results: &mut FormulaResults) -> f64;
 
 #[derive(Debug)]
 pub struct Records {
@@ -55,24 +56,42 @@ impl Records {
     }
     
     pub fn set<T: 'static>(&mut self, has_type: String, date: String, key: String, value: T) {
+        // let mut data_map = AnyMap::new();
+        // data_map.set::<T>(key.to_string(), value);
+        // let mut type_map = AnyMap::new();
+        // type_map.set::<AnyMap>(date.to_string(), data_map);
+        // self.record_cache.set::<AnyMap>(has_type.to_string(), type_map);
+        // return;
         if !self.record_cache.has::<AnyMap>(has_type.to_string()) {
-            self.record_cache.set::<AnyMap>(has_type.to_string(), AnyMap::new());
+            let mut data_map = AnyMap::new();
+            data_map.set::<T>(key.to_string(), value);
+            let mut type_map = AnyMap::new();
+            type_map.set::<AnyMap>(date.to_string(), data_map);
+            self.record_cache.set::<AnyMap>(has_type.to_string(), type_map);
+            println!("step1");
             return;
         }
         if !self.record_cache.get_mut::<AnyMap>(has_type.to_string()).unwrap().has::<AnyMap>(date.to_string()){
-            self.record_cache.get_mut::<AnyMap>(has_type.to_string()).unwrap().set::<AnyMap>(date.to_string(), AnyMap::new());
+            let mut data_map = AnyMap::new();
+            data_map.set::<T>(key.to_string(), value);
+            self.record_cache.get_mut::<AnyMap>(has_type.to_string()).unwrap().set::<AnyMap>(date.to_string(), data_map);
+            println!("step2");
+            return;
         }
         self.record_cache.get_mut::<AnyMap>(has_type.to_string()).unwrap().get_mut::<AnyMap>(date.to_string()).unwrap().set::<T>(key.to_string(), value);
     }
 
-    pub fn each_uncalculated(&mut self, has_type: String, date: String, c: Callback) {
-        let records = &self.record_cache.get_mut::<AnyMap>(has_type.to_string()).unwrap().get_mut::<AnyMap>(date.to_string()).unwrap().values;
-        for (key, value) in &*records {
-            let data = &value.downcast_ref::<AnyMap>().unwrap();
-            println!("{} / {:?}", key, data);
-            // if *data.get_mut::<bool>("calculated".to_string()).unwrap() {
-            //     (c)(data)
-            // }
+    pub fn get_type_data_keys(&mut self, has_type: String, date: String) -> Vec<String> {
+        return self.record_cache.get_mut::<AnyMap>(has_type.to_string()).unwrap().get_mut::<AnyMap>(date.to_string()).unwrap().get_values().keys().cloned().collect::<Vec<String>>();
+    }
+
+    pub fn each_uncalculated(&mut self, has_type: String, date: String, keys: Vec<String>, c: Callback, formula_results: &mut FormulaResults) {
+        for key in keys {
+            let rec = self.record_cache.get_mut::<AnyMap>(has_type.to_string()).unwrap().get_mut::<AnyMap>(date.to_string()).unwrap().get_mut::<AnyMap>(key.to_string()).unwrap();
+            if !rec.get::<bool>("calculated".to_string()).is_none() && *rec.get::<bool>("calculated".to_string()).unwrap() {
+                continue;
+            }
+            (c)(i32::from(100), rec, formula_results);
         }
     }
 }

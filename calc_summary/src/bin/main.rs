@@ -1,5 +1,8 @@
 extern crate diesel;
 
+use std::any::*;
+use std::collections::HashMap;
+use serde_json::{json, Value};
 use diesel::prelude::*;
 use thousands::Separable;
 
@@ -7,6 +10,7 @@ use self::models::*;
 use self::any_map::*;
 use self::calculated_cache::*;
 use self::record_cache::*;
+use self::formula_result::*;
 use calc_summary::*;
 
 fn make_cache(target_dates: [&str;12], calculated_cache: &mut Calculated, record_cache: &mut Records) {
@@ -36,40 +40,39 @@ fn make_cache(target_dates: [&str;12], calculated_cache: &mut Calculated, record
             budget_row_data.set("value".to_string(), f64::from(0));
             budget_row_data.set("calculated".to_string(), true);
             budget_row.get_mut::<AnyMap>(row_date.to_string()).unwrap().set::<Vec<AnyMap>>(target_budget_id.clone(), vec![budget_row_data]);
+        }
 
-            if rec.calculated.unwrap() {
-                calculated_cache.set::<f64>("row".to_string(), row_date.to_string(), rec.row_id.to_string(), rec.value.unwrap());
-                if !rec.is_not_aggregate.unwrap() {
-                    let target_row = budget_row.get_mut::<AnyMap>(row_date.to_string()).unwrap().get_mut::<Vec<AnyMap>>(target_budget_id.clone()).unwrap();
-                    let calced_add = calc::add(&target_row[0].get::<f64>("value".to_string()).unwrap(), &rec.value.unwrap());
-                    target_row[0].set::<f64>("value".to_string(), calced_add)
-                }
-            } else {
-                if !rec.is_not_aggregate.unwrap() {
-                    let mut budget_row_data = AnyMap::new();
-                    budget_row_data.set("row_id".to_string(), rec.row_id);
-                    budget_row_data.set("date".to_string(), rec.date);
-                    budget_row_data.set("value".to_string(), rec.value.unwrap());
-                    budget_row_data.set("calculated".to_string(), rec.calculated.unwrap());
-
-                    let target_row = budget_row.get_mut::<AnyMap>(row_date.to_string()).unwrap().get_mut::<Vec<AnyMap>>(target_budget_id.clone()).unwrap();
-                    target_row.push(budget_row_data);
-                }
-                let mut row_data = AnyMap::new();
-                row_data.set("row_id".to_string(), rec.row_id);
-                row_data.set("date".to_string(), rec.date);
-                row_data.set("value".to_string(), rec.value.unwrap());
-                row_data.set("calculated".to_string(), rec.calculated.unwrap());
-
-                record_cache.set::<AnyMap>("row".to_string(), row_date.to_string(), rec.row_id.to_string(), row_data);
+        if rec.calculated.unwrap() {
+            calculated_cache.set::<f64>("row".to_string(), row_date.to_string(), rec.row_id.to_string(), rec.value.unwrap());
+            if !rec.is_not_aggregate.unwrap() {
+                let target_row = budget_row.get_mut::<AnyMap>(row_date.to_string()).unwrap().get_mut::<Vec<AnyMap>>(target_budget_id.clone()).unwrap();
+                let calced_add = calc::add(&target_row[0].get::<f64>("value".to_string()).unwrap(), &rec.value.unwrap());
+                target_row[0].set::<f64>("value".to_string(), calced_add)
             }
+        } else {
+            if !rec.is_not_aggregate.unwrap() {
+                let mut budget_row_data = AnyMap::new();
+                budget_row_data.set("row_id".to_string(), rec.row_id);
+                budget_row_data.set("date".to_string(), rec.date);
+                budget_row_data.set("value".to_string(), rec.value.unwrap());
+                budget_row_data.set("calculated".to_string(), rec.calculated.unwrap());
+
+                let target_row = budget_row.get_mut::<AnyMap>(row_date.to_string()).unwrap().get_mut::<Vec<AnyMap>>(target_budget_id.clone()).unwrap();
+                target_row.push(budget_row_data);
+            }
+            let mut row_data = AnyMap::new();
+            row_data.set("row_id".to_string(), rec.row_id);
+            row_data.set("date".to_string(), rec.date);
+            row_data.set("value".to_string(), rec.value.unwrap());
+            row_data.set("calculated".to_string(), rec.calculated.unwrap());
+            row_data.set("formula_json".to_string(), rec.formula_json.unwrap());
+            row_data.set("is_not_aggregate".to_string(), rec.is_not_aggregate.unwrap());
+
+            record_cache.set::<AnyMap>("row".to_string(), row_date.to_string(), rec.row_id.to_string(), row_data);
         }
     }
 
     println!("FINISH cache row");
-
-    // println!("{}", row_date.to_string());
-    // println!("{}", target_budget_id.clone());
 
     println!("START cache budget");
 
@@ -198,6 +201,7 @@ fn make_cache(target_dates: [&str;12], calculated_cache: &mut Calculated, record
     }
 
     println!("FINISH cache account");
+
 }
 
 fn main() {
@@ -224,5 +228,126 @@ fn main() {
 
     make_cache(target_dates, &mut calculated_cache, &mut record_cache);
 
-    // record_cache.each_uncalculated()
+    let mut formula_results = FormulaResults::new();
+
+    for target_date in target_dates {
+        let keys = record_cache.get_type_data_keys("row".to_string(), target_date.to_string());
+        record_cache.each_uncalculated("row".to_string(), target_date.to_string(), keys, calculate_row_rec, &mut formula_results);
+    }
+
+    println!("formula_results {:?}", formula_results);
+
+}
+
+// fn build_ast_node_from_middle_expr(build_type: String, params: Vec<serde_json::value::Value>) {
+//
+//     match build_type {
+//         "Add" | "Mul" => {
+//             return { "build_type", list: list_to_a(params["list"]) };
+//         },
+//         "Unit" => {
+//             return build_ast_node_from_middle_expr(params["inner"]);
+//         },
+//         1 => println!("one"),
+//         2 | 3 => println!("two or three"),
+//         4 ... 9 => println!("four ... nine"),
+//         _ => (), // 上記以外のときは`_`で示す。`()`は何もしない。
+//     }
+//
+//     // var build_ast_node_from_middle_expr = (mexpr) => {
+//     //     var [type, params] = mexpr;
+//     //     switch (type) {
+//     //         case 'Add':
+//     //             case 'Mul':
+//     //         return { type, list: list_to_a(params['list']) };
+//     //         case 'Unit':
+//     //         return build_ast_node_from_middle_expr(params['inner']);
+//     //         case 'Num':
+//     //         return { type, number: params['number'] }
+//     //         case 'Elem':
+//     //         return { type, ident: params['ident'], args: params['args'] }
+//     //         default:
+//     //             throw new Error(`Invalid node type: ${type}`);
+//     //     }
+//     // }
+// }
+
+fn calculate_row_rec(depth: i32, rec: &mut AnyMap, formula_results: &mut FormulaResults) -> f64 {
+    let id = i64::from(-1);
+    let value = Some(f64::from(999.12));
+    let data = FormulaResultData { id, value};
+
+    if (!rec.get::<bool>("calculated".to_string()).is_none() && *rec.get::<bool>("calculated".to_string()).unwrap()) || rec.get::<serde_json::Value>("formula_json".to_string()).is_none() {
+        return *rec.get::<f64>("value".to_string()).unwrap();
+    }
+
+    if depth < 0 {
+        // TODO
+        // too_deep_calculation = true;
+        return f64::from(0);;
+    }
+
+    // // let json = rec.get::<serde_json::Value>("formula_json".to_string()).clone().unwrap().as_array().unwrap();
+    // let json_data = rec.get::<serde_json::Value>("formula_json".to_string()).clone().unwrap();
+    // let json_text = json!(json_data);
+    // let mut data: HashMap<&str, Value> = serde_json::from_str(&json_text.to_string()).unwrap();
+    // println!("data {:?}", data);
+
+    // let content = "{\"a\":1}";
+    // let mut data: HashMap<&str, Value> = serde_json::from_str(content).unwrap();
+    // println!("data {:?}", data);
+
+    // println!("formula_json {:?}", json[0]);
+    // println!("formula_json {:?}", json["Add".to_string()]);
+
+    return f64::from(0.1);
+
+    // formula_results.push("row".to_string(), data);
+
+    // var ast = build_ast_node_from_middle_expr(record.formula_json);
+    // logger.print('START calculate_row_rec', record.id, record.row_id);
+    // var unit_id = record.unit_id;
+
+    // println!("push success");
+    // println!("{:?}", rec);
+
+    // if (record.calculated || !record.formula_json) return record.value;
+    // if (depth < 0) {
+    //     too_deep_calculation = true;
+    //     return NaN;
+    // }
+    //
+    // var ast = build_ast_node_from_middle_expr(record.formula_json);
+    // logger.print('START calculate_row_rec', record.id, record.row_id);
+    // var unit_id = record.unit_id;
+    //
+    // record.value = evaluate_node(ast, (node) => {
+    //     switch (node.ident) {
+    //         case 'Profit':
+    //         return calculate_profit(node.args[0], unit_id, record.date, depth - 1);
+    //         case 'AccountCategory':
+    //         return calculate_account_category(node.args[0], unit_id, record.date, depth - 1);
+    //         case 'AccountGroup':
+    //         return calculate_account_group(node.args[0], unit_id, record.date, depth - 1);
+    //         case 'Account':
+    //         return calculate_account(node.args[0], unit_id, record.date, depth - 1);
+    //         case 'Budget':
+    //             var key = node.args[0];
+    //         if (calculated_ids.has('budget', record.date, key)) return calculated_ids.get('budget', record.date, key);
+    //         if (!records.has('budget', record.date, key)) return NaN;
+    //         return r2v_budget_guard(calculate_budget_rec(records.get('budget', record.date, key), depth - 1));
+    //         case 'Row':
+    //             var key = node.args[0];
+    //         if (calculated_ids.has('row', record.date, key)) return calculated_ids.get('row', record.date, key);
+    //         if (!records.has('row', record.date, key)) return NaN;
+    //         return r2v_row_guard(calculate_row_rec(records.get('row', record.date, key), depth - 1));
+    //         default:
+    //             throw new Error(`Unexpected node identifier: ${node.ident}`);
+    //     }
+    // });
+    // record.calculated = true;
+    // function_result.push('row', { id: record.id, value: record.value });
+    // calculated_ids.set('row', record.date, record.row_id, record.value);
+    // logger.print('FINISH calculate_row_rec', record.id, record.row_id);
+    // return record.value;
 }

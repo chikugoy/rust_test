@@ -4,6 +4,7 @@ pub mod calculated_cache;
 pub mod record_cache;
 pub mod calc;
 pub mod any_map;
+pub mod formula_result;
 
 use diesel::pg::PgConnection;
 use diesel::prelude::*;

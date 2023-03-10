@@ -77,4 +77,14 @@ impl AnyMap {
 
         return generate_cache;
     }
+
+    // pub fn convert_any_map(records: Vec<dyn Any>) -> AnyMap {
+    //     let mut result = AnyMap::new();
+    //     let mut is_exists_array = false;
+    //     for rec in records {
+    //         if rec.is_array() {
+    //             convert_any_map(value);
+    //         }
+    //     }
+    // }
 }
