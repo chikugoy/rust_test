@@ -1,6 +1,9 @@
 extern crate diesel;
 
+use csv;
 use std::env;
+use std::path::Path;
+use std::error::Error;
 use std::time::Instant;
 use diesel::prelude::*;
 use thousands::Separable;
@@ -32,7 +35,6 @@ fn make_cache(is_not_aggregate_arg: bool, target_dates: [&str;12], calculated_ca
         let target_budget_id = if !rec.budget_id.is_none() { rec.budget_id.expect("").to_string() } else { "".to_string() };
 
         if !budget_row.get::<AnyMap>(row_date.to_string()).unwrap().has::<AnyMap>(target_budget_id.clone()) {
-            // FIXME: 冗長なので改善したい
             let mut budget_row_data = AnyMap::new();
             budget_row_data.set("row_id".to_string(), i64::from(-1));
             budget_row_data.set("date".to_string(), rec.date);
@@ -49,7 +51,7 @@ fn make_cache(is_not_aggregate_arg: bool, target_dates: [&str;12], calculated_ca
                 target_row[0].set::<f64>("value".to_string(), calced_add)
             }
         } else {
-            if !rec.is_not_aggregate.unwrap() {
+            if !is_not_aggregate_arg && !rec.is_not_aggregate.unwrap() {
                 let mut budget_row_data = AnyMap::new();
                 budget_row_data.set("row_id".to_string(), rec.row_id);
                 budget_row_data.set("date".to_string(), rec.date);
@@ -103,7 +105,7 @@ fn make_cache(is_not_aggregate_arg: bool, target_dates: [&str;12], calculated_ca
         if rec.calculated.unwrap() {
             calculated_cache.set::<f64>("budget".to_string(), row_date.to_string(), rec.budget_id.to_string(), target_value.clone());
 
-            if !is_not_aggregate_arg {
+            if !is_not_aggregate_arg && !is_not_aggregate_arg {
                 let target_row = record_cache.get_mut::<Vec<AnyMap>>("account_unit".to_string(), row_date.to_string(), aukey.to_string()).unwrap();
                 let calced_add = calc::add(target_row[0].get::<f64>("value".to_string()).unwrap(), &target_value.clone());
                 target_row[0].set::<f64>("value".to_string(), calced_add);
@@ -128,7 +130,6 @@ fn make_cache(is_not_aggregate_arg: bool, target_dates: [&str;12], calculated_ca
             budget_data.set("calculated".to_string(), rec.calculated.unwrap());
             record_cache.set::<AnyMap>("budget".to_string(), row_date.to_string(), rec.budget_id.to_string(), budget_data);
         }
-        break;
     }
 
     println!("FINISH cache budget");
@@ -202,18 +203,24 @@ fn make_cache(is_not_aggregate_arg: bool, target_dates: [&str;12], calculated_ca
     println!("FINISH cache account");
 }
 
-fn calculate_budget_rec(rec: &mut AnyMap, formula_results: &mut FormulaResults) {
-    if !rec.get::<bool>("calculated".to_string()).is_none() && *rec.get::<bool>("calculated".to_string()).unwrap() {
-        return;
+fn calculate_budget_rec(records: &mut Vec<AnyMap>, formula_results: &mut FormulaResults) {
+    let mut calculated_value = f64::from(0);
+    let mut budget_id = i64::from(0);
+
+    for rec in records {
+        if !rec.get::<bool>("calculated".to_string()).is_none() && *rec.get::<bool>("calculated".to_string()).unwrap() {
+            continue;
+        }
+
+        calculated_value = calculated_value + (*rec.get::<f64>("forecast".to_string()).unwrap() * 1.05);
+        budget_id = *rec.get::<i64>("budget_id".to_string()).unwrap();
     }
 
-    let calculated_value = *rec.get::<f64>("forecast".to_string()).unwrap() * 1.05;
     let data = FormulaResultData {
-        id: *rec.get::<i64>("budget_id".to_string()).unwrap(),
+        id: budget_id,
         value: Some(calculated_value),
     };
     formula_results.push("budget".to_string(), data);
-    return;
 }
 
 
@@ -231,8 +238,28 @@ fn calculate_row_rec(rec: &mut AnyMap, formula_results: &mut FormulaResults) {
     return;
 }
 
+fn write_to_csv(path: String, results: Vec<FormulaResultData>) -> Result<(), Box<dyn Error>> {
+    let mut writer = csv::Writer::from_path(&path)?;
+    writer.write_record(&[
+        "id",
+        "value",
+    ])?;
+
+    for rec in results {
+        writer.write_record(&[
+            &rec.id.to_string(),
+            &rec.value.expect("null").to_string(),
+        ])?;
+    }
+
+    writer.flush()?;
+    Ok(())
+}
+
 fn main() {
-    let mut start = Instant::now();
+    // ==============================================================
+    // make cache
+    let start = Instant::now();
 
     let args: Vec<String> = env::args().collect();
     println!("{:?}", args);
@@ -267,20 +294,41 @@ fn main() {
 
     make_cache(is_not_aggregate, target_dates, &mut calculated_cache, &mut record_cache);
 
+    let end = start.elapsed();
+    println!("make cache: {}.{:03}秒", end.as_secs(), end.subsec_nanos() / 1_000_000);
+
+    // ==============================================================
+    // calculate
+
+    let start = Instant::now();
+
     let mut formula_results = FormulaResults::new();
 
     for target_date in target_dates {
-        let keys = record_cache.get_type_data_keys("row".to_string(), target_date.to_string());
-        println!("target_date {:?} {:?}", target_date.clone(), keys.join(","));
-        record_cache.each_uncalculated("row".to_string(), target_date.to_string(), keys, calculate_row_rec, &mut formula_results);
+        let row_keys = record_cache.get_type_data_keys("row".to_string(), target_date.to_string());
+        record_cache.each_uncalculated_for_row("row".to_string(), target_date.to_string(), row_keys, calculate_row_rec, &mut formula_results);
 
-        let keys = record_cache.get_type_data_keys("budget".to_string(), target_date.to_string());
-        println!("target_date {:?} {:?}", target_date.clone(), keys.join(","));
-        record_cache.each_uncalculated("budget".to_string(), target_date.to_string(), keys, calculate_budget_rec, &mut formula_results);
+        let records = record_cache.get_mut::<Vec<AnyMap>>("account_unit".to_string(), target_date.to_string(), "7231fb2d-c5a1-49d3-9481-9ec8846e9337-2".to_string()).unwrap();
+        if records.len() == 0 { continue }
+        calculate_budget_rec(records, &mut formula_results);
     }
 
-    println!("formula_results {:?}", formula_results);
+    let end = start.elapsed();
+    println!("calculate: {}.{:03}秒", end.as_secs(), end.subsec_nanos() / 1_000_000);
 
-    let mut end = start.elapsed();
-    println!("main: {}.{:0}秒", end.as_secs(), end.subsec_nanos() / 1_000_000);
+    // ==============================================================
+    // csv output
+
+    let start = Instant::now();
+
+    const BASE_PATH: &str = "./output/";
+
+    if let Err(e) = write_to_csv(BASE_PATH.to_string() + "rows.csv", formula_results.row) {
+        eprintln!("{}", e)
+    }
+    if let Err(e) = write_to_csv(BASE_PATH.to_string() + "budgets.csv", formula_results.budget) {
+        eprintln!("{}", e)
+    }
+    let end = start.elapsed();
+    println!("csv output : {}.{:03}秒", end.as_secs(), end.subsec_nanos() / 1_000_000);
 }

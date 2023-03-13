@@ -1,7 +1,7 @@
 use crate::any_map::AnyMap;
 use crate::formula_result::FormulaResults;
 
-type Callback = fn(rec: &mut AnyMap, formula_results: &mut FormulaResults);
+type CallbackRow = fn(rec: &mut AnyMap, formula_results: &mut FormulaResults);
 
 #[derive(Debug)]
 pub struct Records {
@@ -77,9 +77,9 @@ impl Records {
         return self.record_cache.get_mut::<AnyMap>(has_type.to_string()).unwrap().get_mut::<AnyMap>(date.to_string()).unwrap().get_values().keys().cloned().collect::<Vec<String>>();
     }
 
-    pub fn each_uncalculated(&mut self, has_type: String, date: String, keys: Vec<String>, c: Callback, formula_results: &mut FormulaResults) {
+    pub fn each_uncalculated_for_row(&mut self, has_type: String, date: String, keys: Vec<String>, c: CallbackRow, formula_results: &mut FormulaResults) {
         for key in keys {
-            let rec = self.record_cache.get_mut::<AnyMap>(has_type.to_string()).unwrap().get_mut::<AnyMap>(date.to_string()).unwrap().get_mut::<AnyMap>(key.to_string()).unwrap();
+            let rec = Self::get_mut::<AnyMap>(self, has_type.to_string(), date.to_string(), key.to_string()).unwrap();
             if !rec.get::<bool>("calculated".to_string()).is_none() && *rec.get::<bool>("calculated".to_string()).unwrap() {
                 continue;
             }
