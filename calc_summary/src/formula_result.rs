@@ -1,7 +1,3 @@
-use std::any::*;
-
-use crate::any_map::AnyMap;
-
 #[derive(Debug)]
 pub struct FormulaResultData {
     pub id: i64,

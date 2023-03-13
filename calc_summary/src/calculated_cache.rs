@@ -1,5 +1,3 @@
-use std::any::*;
-
 use crate::any_map::AnyMap;
 
 #[derive(Debug)]
