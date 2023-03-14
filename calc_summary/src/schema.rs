@@ -2,7 +2,7 @@
 
 diesel::table! {
     // cabernet_zakky.pavs (id) {
-    cabernet_chikugo_20221207.pavs (id) {
+    cabernet_zakky.pavs (id) {
         id -> Int8,
         target_type -> Varchar,
         target_id -> Int8,
@@ -17,7 +17,7 @@ diesel::table! {
 
 diesel::table! {
     // cabernet_zakky.pavs (id) {
-    cabernet_chikugo_20221207.pavs_insert_test (id) {
+    cabernet_zakky.pavs_insert_test (id) {
         id -> Int8,
         target_type -> Varchar,
         target_id -> Int8,
@@ -32,7 +32,7 @@ diesel::table! {
 
 
 diesel::table! {
-    cabernet_chikugo_20221207.tmp_accounts (id) {
+    cabernet_zakky.tmp_accounts (id) {
         id -> Int8,
         account_id -> Nullable<Uuid>,
         category_id -> Nullable<Int4>,
@@ -43,7 +43,7 @@ diesel::table! {
 }
 
 diesel::table! {
-    cabernet_chikugo_20221207.tmp_budget_pavs (id) {
+    cabernet_zakky.tmp_budget_pavs (id) {
         id -> Int8,
         budget_id -> Int8,
         identity_id -> Int8,
@@ -59,7 +59,7 @@ diesel::table! {
 }
 
 diesel::table! {
-    cabernet_chikugo_20221207.tmp_row_pavs (id) {
+    cabernet_zakky.tmp_row_pavs (id) {
         id -> Int8,
         row_id -> Int8,
         budget_id -> Nullable<Int8>,

@@ -60,14 +60,12 @@ impl Records {
             let mut type_map = AnyMap::new();
             type_map.set::<AnyMap>(date.to_string(), data_map);
             self.record_cache.set::<AnyMap>(has_type.to_string(), type_map);
-            println!("step1");
             return;
         }
         if !self.record_cache.get_mut::<AnyMap>(has_type.to_string()).unwrap().has::<AnyMap>(date.to_string()){
             let mut data_map = AnyMap::new();
             data_map.set::<T>(key.to_string(), value);
             self.record_cache.get_mut::<AnyMap>(has_type.to_string()).unwrap().set::<AnyMap>(date.to_string(), data_map);
-            println!("step2");
             return;
         }
         self.record_cache.get_mut::<AnyMap>(has_type.to_string()).unwrap().get_mut::<AnyMap>(date.to_string()).unwrap().set::<T>(key.to_string(), value);

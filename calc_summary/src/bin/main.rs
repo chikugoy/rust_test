@@ -2,7 +2,6 @@ extern crate diesel;
 
 use csv;
 use std::env;
-use std::path::Path;
 use std::error::Error;
 use std::time::Instant;
 use diesel::prelude::*;
@@ -10,12 +9,11 @@ use thousands::Separable;
 
 use self::models::*;
 use self::any_map::*;
-use self::calculated_cache::*;
 use self::record_cache::*;
 use self::formula_result::*;
 use calc_summary::*;
 
-fn make_cache(target_dates: [&str;12], calculated_cache: &mut Calculated, record_cache: &mut Records) {
+fn make_cache(target_dates: [&str;12], record_cache: &mut Records) {
     let mut budget_row = AnyMap::generate_cache();
 
     println!("START cache row");
@@ -30,6 +28,8 @@ fn make_cache(target_dates: [&str;12], calculated_cache: &mut Calculated, record
         .expect("Error loading tmp row pavs");
     println!("tmp row pavs count {}", results.len().separate_with_commas());
 
+    let start = Instant::now();
+
     for rec in results {
         let row_date: &String = &rec.date.format("%Y-%m-%d").to_string();
         let target_budget_id = if !rec.budget_id.is_none() { rec.budget_id.expect("").to_string() } else { "".to_string() };
@@ -43,35 +43,29 @@ fn make_cache(target_dates: [&str;12], calculated_cache: &mut Calculated, record
             budget_row.get_mut::<AnyMap>(row_date.to_string()).unwrap().set::<Vec<AnyMap>>(target_budget_id.clone(), vec![budget_row_data]);
         }
 
-        if rec.calculated.unwrap() {
-            calculated_cache.set::<f64>("row".to_string(), row_date.to_string(), rec.row_id.to_string(), rec.value.unwrap());
-            if !rec.is_not_aggregate.unwrap() {
-                let target_row = budget_row.get_mut::<AnyMap>(row_date.to_string()).unwrap().get_mut::<Vec<AnyMap>>(target_budget_id.clone()).unwrap();
-                let calced_add = calc::add(&target_row[0].get::<f64>("value".to_string()).unwrap(), &rec.value.unwrap());
-                target_row[0].set::<f64>("value".to_string(), calced_add)
-            }
-        } else {
-            if !rec.is_not_aggregate.unwrap() {
-                let mut budget_row_data = AnyMap::new();
-                budget_row_data.set("row_id".to_string(), rec.row_id);
-                budget_row_data.set("date".to_string(), rec.date);
-                budget_row_data.set("value".to_string(), rec.value.unwrap());
-                budget_row_data.set("calculated".to_string(), rec.calculated.unwrap());
+        if !rec.is_not_aggregate.unwrap() {
+            let mut budget_row_data = AnyMap::new();
+            budget_row_data.set("row_id".to_string(), rec.row_id);
+            budget_row_data.set("date".to_string(), rec.date);
+            budget_row_data.set("value".to_string(), rec.value.unwrap());
+            budget_row_data.set("calculated".to_string(), rec.calculated.unwrap());
 
-                let target_row = budget_row.get_mut::<AnyMap>(row_date.to_string()).unwrap().get_mut::<Vec<AnyMap>>(target_budget_id.clone()).unwrap();
-                target_row.push(budget_row_data);
-            }
-            let mut row_data = AnyMap::new();
-            row_data.set("row_id".to_string(), rec.row_id);
-            row_data.set("date".to_string(), rec.date);
-            row_data.set("value".to_string(), rec.value.unwrap());
-            row_data.set("calculated".to_string(), rec.calculated.unwrap());
-            row_data.set("formula_json".to_string(), rec.formula_json.unwrap());
-            row_data.set("is_not_aggregate".to_string(), rec.is_not_aggregate.unwrap());
-
-            record_cache.set::<AnyMap>("row".to_string(), row_date.to_string(), rec.row_id.to_string(), row_data);
+            let target_row = budget_row.get_mut::<AnyMap>(row_date.to_string()).unwrap().get_mut::<Vec<AnyMap>>(target_budget_id.clone()).unwrap();
+            target_row.push(budget_row_data);
         }
+        let mut row_data = AnyMap::new();
+        row_data.set("row_id".to_string(), rec.row_id);
+        row_data.set("date".to_string(), rec.date);
+        row_data.set("value".to_string(), if rec.value.is_none() { f64::from(0) } else { rec.value.unwrap() } );
+        row_data.set("calculated".to_string(), rec.calculated.unwrap());
+        row_data.set("formula_json".to_string(), if rec.formula_json.is_none() { None } else { Some(rec.formula_json.unwrap()) } );
+        row_data.set("is_not_aggregate".to_string(), rec.is_not_aggregate.unwrap());
+
+        record_cache.set::<AnyMap>("row".to_string(), row_date.to_string(), rec.row_id.to_string(), row_data);
     }
+
+    let end = start.elapsed();
+    println!("make cache row: {}.{:01}秒", end.as_secs(), end.subsec_nanos() / 1_000_000);
 
     println!("FINISH cache row");
 
@@ -81,6 +75,8 @@ fn make_cache(target_dates: [&str;12], calculated_cache: &mut Calculated, record
         .load::<TmpBudgetPav>(connection)
         .expect("Error loading tmp row budgets");
     println!("tmp row budgets count {}", results.len().separate_with_commas());
+
+    let start = Instant::now();
 
     for rec in results {
         let row_date: &String = &rec.date.format("%Y-%m-%d").to_string();
@@ -100,35 +96,28 @@ fn make_cache(target_dates: [&str;12], calculated_cache: &mut Calculated, record
             record_cache.set::<Vec<AnyMap>>("account_unit".to_string(), row_date.to_string(), aukey.to_string(), vec![account_unit_data]);
         }
 
-        let target_value = if rec.budget.is_none() { rec.forecast.unwrap() } else { rec.budget.unwrap() };
+        let mut account_unit_data = AnyMap::new();
+        account_unit_data.set("budget_id".to_string(), rec.budget_id);
+        account_unit_data.set("date".to_string(), rec.date);
+        account_unit_data.set("budget".to_string(), if rec.budget.is_none() { f64::from(0) } else {rec.budget.unwrap()});
+        account_unit_data.set("forecast".to_string(), rec.forecast.unwrap());
+        account_unit_data.set("achievement".to_string(), rec.achievement.unwrap());
+        account_unit_data.set("calculated".to_string(), rec.calculated.unwrap());
+        let target_row = record_cache.get_mut::<Vec<AnyMap>>("account_unit".to_string(), row_date.to_string(), aukey.to_string()).unwrap();
+        target_row.push(account_unit_data);
 
-        if rec.calculated.unwrap() {
-            calculated_cache.set::<f64>("budget".to_string(), row_date.to_string(), rec.budget_id.to_string(), target_value.clone());
-
-            let target_row = record_cache.get_mut::<Vec<AnyMap>>("account_unit".to_string(), row_date.to_string(), aukey.to_string()).unwrap();
-            let calced_add = calc::add(target_row[0].get::<f64>("value".to_string()).unwrap(), &target_value.clone());
-            target_row[0].set::<f64>("value".to_string(), calced_add);
-        } else {
-            let mut account_unit_data = AnyMap::new();
-            account_unit_data.set("budget_id".to_string(), rec.budget_id);
-            account_unit_data.set("date".to_string(), rec.date);
-            account_unit_data.set("budget".to_string(), if rec.budget.is_none() { f64::from(0) } else {rec.budget.unwrap()});
-            account_unit_data.set("forecast".to_string(), rec.forecast.unwrap());
-            account_unit_data.set("achievement".to_string(), rec.achievement.unwrap());
-            account_unit_data.set("calculated".to_string(), rec.calculated.unwrap());
-            let target_row = record_cache.get_mut::<Vec<AnyMap>>("account_unit".to_string(), row_date.to_string(), aukey.to_string()).unwrap();
-            target_row.push(account_unit_data);
-
-            let mut budget_data = AnyMap::new();
-            budget_data.set("budget_id".to_string(), rec.budget_id);
-            budget_data.set("date".to_string(), rec.date);
-            budget_data.set("budget".to_string(), if rec.budget.is_none() { f64::from(0) } else {rec.budget.unwrap()});
-            budget_data.set("forecast".to_string(), rec.forecast.unwrap());
-            budget_data.set("achievement".to_string(), rec.achievement.unwrap());
-            budget_data.set("calculated".to_string(), rec.calculated.unwrap());
-            record_cache.set::<AnyMap>("budget".to_string(), row_date.to_string(), rec.budget_id.to_string(), budget_data);
-        }
+        let mut budget_data = AnyMap::new();
+        budget_data.set("budget_id".to_string(), rec.budget_id);
+        budget_data.set("date".to_string(), rec.date);
+        budget_data.set("budget".to_string(), if rec.budget.is_none() { f64::from(0) } else {rec.budget.unwrap()});
+        budget_data.set("forecast".to_string(), rec.forecast.unwrap());
+        budget_data.set("achievement".to_string(), rec.achievement.unwrap());
+        budget_data.set("calculated".to_string(), rec.calculated.unwrap());
+        record_cache.set::<AnyMap>("budget".to_string(), row_date.to_string(), rec.budget_id.to_string(), budget_data);
     }
+
+    let end = start.elapsed();
+    println!("make cache budget: {}.{:01}秒", end.as_secs(), end.subsec_nanos() / 1_000_000);
 
     println!("FINISH cache budget");
 
@@ -138,6 +127,8 @@ fn make_cache(target_dates: [&str;12], calculated_cache: &mut Calculated, record
         .load::<TmpAccount>(connection)
         .expect("Error loading tmp row accounts");
     println!("tmp row accounts count {}", results.len().separate_with_commas());
+
+    let start = Instant::now();
 
     for rec in results {
         for profit_id in rec.profit_id_array.clone().unwrap().as_array().unwrap() {
@@ -198,20 +189,27 @@ fn make_cache(target_dates: [&str;12], calculated_cache: &mut Calculated, record
         }
     }
 
+    let end = start.elapsed();
+    println!("make cache account: {}.{:01}秒", end.as_secs(), end.subsec_nanos() / 1_000_000);
+
     println!("FINISH cache account");
 }
 
 fn calculate_budget_rec(records: &mut Vec<AnyMap>, formula_results: &mut FormulaResults, target_date: String, key: String) {
     let mut calculated_value = f64::from(0);
-    let mut budget_id = i64::from(0);
+    let mut is_not_calculated = false;
 
     for rec in records {
-        if !rec.get::<bool>("calculated".to_string()).is_none() && *rec.get::<bool>("calculated".to_string()).unwrap() {
+        if rec.get::<bool>("calculated".to_string()).is_none() || *rec.get::<bool>("calculated".to_string()).unwrap() {
             continue;
         }
 
+        is_not_calculated = true;
         calculated_value = calculated_value + (*rec.get::<f64>("forecast".to_string()).unwrap() * 1.05);
-        budget_id = *rec.get::<i64>("budget_id".to_string()).unwrap();
+    }
+
+    if !is_not_calculated {
+        return;
     }
 
     let data = FormulaResultData {
@@ -222,13 +220,11 @@ fn calculate_budget_rec(records: &mut Vec<AnyMap>, formula_results: &mut Formula
     formula_results.push("budget".to_string(), data);
 }
 
-
 fn calculate_row_rec(rec: &mut AnyMap, formula_results: &mut FormulaResults, target_date: String, key: String) {
-    if (!rec.get::<bool>("calculated".to_string()).is_none() && *rec.get::<bool>("calculated".to_string()).unwrap()) || rec.get::<serde_json::Value>("formula_json".to_string()).is_none() {
+    if !rec.get::<bool>("calculated".to_string()).is_none() && *rec.get::<bool>("calculated".to_string()).unwrap() {
         return;
     }
 
-    // println!("value {:?}", *rec.get::<f64>("value".to_string()).unwrap());
     let calculated_value = *rec.get::<f64>("value".to_string()).unwrap() * 1.05;
     let data = FormulaResultData {
         date: target_date.clone(),
@@ -245,7 +241,7 @@ fn calculate(target_dates: [&str;12], record_cache: &mut Records, formula_result
         let row_keys = record_cache.get_type_data_keys("row".to_string(), target_date.to_string());
         for key in row_keys {
             let rec = record_cache.get_mut::<AnyMap>("row".to_string(), target_date.to_string(), key.to_string()).unwrap();
-            calculate_row_rec(rec, &mut formula_results, target_date.to_string(), key.to_string());
+            calculate_row_rec(rec, formula_results, target_date.to_string(), key.to_string());
         }
 
         // budget calculate
@@ -253,7 +249,7 @@ fn calculate(target_dates: [&str;12], record_cache: &mut Records, formula_result
         for key in budget_keys {
             let records = record_cache.get_mut::<Vec<AnyMap>>("account_unit".to_string(), target_date.to_string(), key.to_string()).unwrap();
             if records.len() == 0 { continue }
-            calculate_budget_rec(records, &mut formula_results, target_date.to_string(), key.to_string());
+            calculate_budget_rec(records, formula_results, target_date.to_string(), key.to_string());
         }
     }
 }
@@ -281,7 +277,7 @@ fn calculate_summary(target_dates: [&str;12], record_cache: &mut Records, formul
         let data = FormulaResultData {
             date: "".to_string(),
             key: key.clone(),
-            value: Some(*row_summary_cache.get::<f64>(key.to_string()).unwrap()),
+            value: Some(*row_summary_cache.get::<f64>(key.to_string()).unwrap() * 1.05),
         };
 
         formula_results.push("row".to_string(), data);
@@ -311,7 +307,7 @@ fn calculate_summary(target_dates: [&str;12], record_cache: &mut Records, formul
         let data = FormulaResultData {
             date: "".to_string(),
             key: key.clone(),
-            value: Some(*budget_summary_cache.get::<f64>(key.to_string()).unwrap()),
+            value: Some(*budget_summary_cache.get::<f64>(key.to_string()).unwrap() * 1.05),
         };
 
         formula_results.push("budget".to_string(), data);
@@ -354,40 +350,36 @@ fn main() {
     let mut is_summary = false;
     if args.len() > 1 && args[1] == "summary" {
         is_summary = true;
-        println!("not summary");
-    } else {
         println!("yes summary");
+    } else {
+        println!("not summary");
     }
 
     let target_dates = [
-        "2022-04-01",
-        "2022-05-01",
-        "2022-06-01",
-        "2022-07-01",
-        "2022-08-01",
-        "2022-09-01",
-        "2022-10-01",
-        "2022-11-01",
-        "2022-12-01",
-        "2023-01-01",
-        "2023-02-01",
-        "2023-03-01",
+        "2021-02-01",
+        "2021-03-01",
+        "2021-04-01",
+        "2021-05-01",
+        "2021-06-01",
+        "2021-07-01",
+        "2021-08-01",
+        "2021-09-01",
+        "2021-10-01",
+        "2021-11-01",
+        "2021-12-01",
+        "2022-01-01",
     ];
-
-    let mut calculated_cache = Calculated::new();
-    calculated_cache.initialize();
 
     let mut record_cache = Records::new();
     record_cache.initialize();
 
-    make_cache(target_dates, &mut calculated_cache, &mut record_cache);
+    make_cache(target_dates, &mut record_cache);
 
     let end = start.elapsed();
-    println!("make cache: {}.{:03}秒", end.as_secs(), end.subsec_nanos() / 1_000_000);
+    println!("make cache: {}.{:01}秒", end.as_secs(), end.subsec_nanos() / 1_000_000);
 
     // ==============================================================
     // calculate
-
     let start = Instant::now();
 
     let mut formula_results = FormulaResults::new();
@@ -399,11 +391,10 @@ fn main() {
     }
 
     let end = start.elapsed();
-    println!("calculate: {}.{:03}秒", end.as_secs(), end.subsec_nanos() / 1_000_000);
+    println!("calculate: {}.{:01}秒", end.as_secs(), end.subsec_nanos() / 1_000_000);
 
     // ==============================================================
     // csv output
-
     let start = Instant::now();
 
     const BASE_PATH: &str = "./output/";
@@ -415,5 +406,5 @@ fn main() {
         eprintln!("{}", e)
     }
     let end = start.elapsed();
-    println!("csv output : {}.{:03}秒", end.as_secs(), end.subsec_nanos() / 1_000_000);
+    println!("csv output : {}.{:01}秒", end.as_secs(), end.subsec_nanos() / 1_000_000);
 }
