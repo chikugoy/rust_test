@@ -1,6 +1,7 @@
 #[derive(Debug)]
 pub struct FormulaResultData {
-    pub id: i64,
+    pub date: String,
+    pub key: String,
     pub value: Option<f64>
 }
 
