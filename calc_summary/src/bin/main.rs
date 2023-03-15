@@ -4,14 +4,24 @@ use csv;
 use std::env;
 use std::error::Error;
 use std::time::Instant;
+use std::collections::HashMap;
 use diesel::prelude::*;
 use thousands::Separable;
+use chrono::NaiveDate;
 
 use self::models::*;
 use self::any_map::*;
 use self::record_cache::*;
 use self::formula_result::*;
 use calc_summary::*;
+
+#[derive(Copy, Clone)]
+struct TestData {
+    row_id: i64,
+    date: NaiveDate,
+    value: f64,
+    calculated: bool
+}
 
 fn make_cache(target_dates: [&str;12], record_cache: &mut Records) {
     let mut budget_row = AnyMap::generate_cache();
@@ -23,10 +33,15 @@ fn make_cache(target_dates: [&str;12], record_cache: &mut Records) {
     use self::schema::tmp_accounts::dsl::*;
     let connection = &mut establish_connection();
 
+    let start = Instant::now();
+
     let results = tmp_row_pavs
         .load::<TmpRowPav>(connection)
         .expect("Error loading tmp row pavs");
     println!("tmp row pavs count {}", results.len().separate_with_commas());
+
+    let end = start.elapsed();
+    println!("tmp row pavs get : {}.{:01}秒", end.as_secs(), end.subsec_nanos() / 1_000_000);
 
     let start = Instant::now();
 
@@ -71,10 +86,15 @@ fn make_cache(target_dates: [&str;12], record_cache: &mut Records) {
 
     println!("START cache budget");
 
+    let start = Instant::now();
+
     let results = tmp_budget_pavs
         .load::<TmpBudgetPav>(connection)
         .expect("Error loading tmp row budgets");
     println!("tmp row budgets count {}", results.len().separate_with_commas());
+
+    let end = start.elapsed();
+    println!("tmp row budgets get : {}.{:01}秒", end.as_secs(), end.subsec_nanos() / 1_000_000);
 
     let start = Instant::now();
 
@@ -123,10 +143,15 @@ fn make_cache(target_dates: [&str;12], record_cache: &mut Records) {
 
     println!("START cache account");
 
+    let start = Instant::now();
+
     let results = tmp_accounts
         .load::<TmpAccount>(connection)
         .expect("Error loading tmp row accounts");
     println!("tmp row accounts count {}", results.len().separate_with_commas());
+
+    let end = start.elapsed();
+    println!("tmp row budgets get : {}.{:01}秒", end.as_secs(), end.subsec_nanos() / 1_000_000);
 
     let start = Instant::now();
 
@@ -340,71 +365,142 @@ fn write_to_csv(path: String, results: Vec<FormulaResultData>) -> Result<(), Box
     Ok(())
 }
 
+fn simple_calculate() {
+    use self::schema::tmp_row_pavs::dsl::*;
+    let connection = &mut establish_connection();
+
+    let start = Instant::now();
+
+    let results = tmp_row_pavs
+        .load::<TmpRowPav>(connection)
+        .expect("Error loading tmp row pavs");
+    println!("tmp row pavs count {}", results.len().separate_with_commas());
+
+    let end = start.elapsed();
+    println!("tmp row pavs get : {}.{:01}秒", end.as_secs(), end.subsec_nanos() / 1_000_000);
+
+    let start = Instant::now();
+
+    let mut test_array = vec![];
+
+    for rec in &results {
+        let test_data = TestData {
+            row_id: rec.row_id,
+            date: rec.date,
+            value: rec.value.unwrap() * 1.05,
+            calculated: rec.calculated.unwrap()
+        };
+        test_array.push(test_data)
+    }
+
+    let end = start.elapsed();
+    println!("tmp row pavs to struct in array : {}.{:01}秒", end.as_secs(), end.subsec_nanos() / 1_000_000);
+
+    let mut test_array_map = HashMap::new();
+
+    for rec in &results {
+        let test_data = TestData {
+            row_id: rec.row_id,
+            date: rec.date,
+            value: rec.value.unwrap() * 1.05,
+            calculated: rec.calculated.unwrap()
+        };
+        test_array_map.insert(rec.row_id, test_data);
+    }
+
+    let end = start.elapsed();
+    println!("tmp row pavs to struct in hash map : {}.{:01}秒", end.as_secs(), end.subsec_nanos() / 1_000_000);
+
+    let mut test_array_map: HashMap<String, TestData> = HashMap::new();
+
+    for rec in &results {
+        match test_array_map.get_mut(&rec.account_id.unwrap().to_string()) {
+            Some(v) => {
+                v.value = v.value + (rec.value.unwrap() * 1.05);
+            },
+            None => {
+                let new_test_data = TestData {
+                    row_id: rec.row_id,
+                    date: rec.date,
+                    value: rec.value.unwrap() * 1.05,
+                    calculated: rec.calculated.unwrap()
+                };
+                test_array_map.insert(rec.account_id.unwrap().to_string(), new_test_data);
+            }
+        };
+    }
+
+    let end = start.elapsed();
+    println!("tmp row pavs to summary struct in hash map : {}.{:01}秒", end.as_secs(), end.subsec_nanos() / 1_000_000);
+}
+
 fn main() {
-    // ==============================================================
-    // make cache
-    let start = Instant::now();
-
-    let args: Vec<String> = env::args().collect();
-    println!("{:?}", args);
-    let mut is_summary = false;
-    if args.len() > 1 && args[1] == "summary" {
-        is_summary = true;
-        println!("yes summary");
-    } else {
-        println!("not summary");
-    }
-
-    let target_dates = [
-        "2021-02-01",
-        "2021-03-01",
-        "2021-04-01",
-        "2021-05-01",
-        "2021-06-01",
-        "2021-07-01",
-        "2021-08-01",
-        "2021-09-01",
-        "2021-10-01",
-        "2021-11-01",
-        "2021-12-01",
-        "2022-01-01",
-    ];
-
-    let mut record_cache = Records::new();
-    record_cache.initialize();
-
-    make_cache(target_dates, &mut record_cache);
-
-    let end = start.elapsed();
-    println!("make cache: {}.{:01}秒", end.as_secs(), end.subsec_nanos() / 1_000_000);
-
-    // ==============================================================
-    // calculate
-    let start = Instant::now();
-
-    let mut formula_results = FormulaResults::new();
-
-    if !is_summary {
-        calculate(target_dates, &mut record_cache, &mut formula_results);
-    } else {
-        calculate_summary(target_dates, &mut record_cache, &mut formula_results);
-    }
-
-    let end = start.elapsed();
-    println!("calculate: {}.{:01}秒", end.as_secs(), end.subsec_nanos() / 1_000_000);
-
-    // ==============================================================
-    // csv output
-    let start = Instant::now();
-
-    const BASE_PATH: &str = "./output/";
-
-    if let Err(e) = write_to_csv(BASE_PATH.to_string() + "rows.csv", formula_results.row) {
-        eprintln!("{}", e)
-    }
-    if let Err(e) = write_to_csv(BASE_PATH.to_string() + "budgets.csv", formula_results.budget) {
-        eprintln!("{}", e)
-    }
-    let end = start.elapsed();
-    println!("csv output : {}.{:01}秒", end.as_secs(), end.subsec_nanos() / 1_000_000);
+    simple_calculate();
+    //
+    // // ==============================================================
+    // // make cache
+    // let start = Instant::now();
+    //
+    // let args: Vec<String> = env::args().collect();
+    // println!("{:?}", args);
+    // let mut is_summary = false;
+    // if args.len() > 1 && args[1] == "summary" {
+    //     is_summary = true;
+    //     println!("yes summary");
+    // } else {
+    //     println!("not summary");
+    // }
+    //
+    // let target_dates = [
+    //     "2021-02-01",
+    //     "2021-03-01",
+    //     "2021-04-01",
+    //     "2021-05-01",
+    //     "2021-06-01",
+    //     "2021-07-01",
+    //     "2021-08-01",
+    //     "2021-09-01",
+    //     "2021-10-01",
+    //     "2021-11-01",
+    //     "2021-12-01",
+    //     "2022-01-01",
+    // ];
+    //
+    // let mut record_cache = Records::new();
+    // record_cache.initialize();
+    //
+    // make_cache(target_dates, &mut record_cache);
+    //
+    // let end = start.elapsed();
+    // println!("make cache: {}.{:01}秒", end.as_secs(), end.subsec_nanos() / 1_000_000);
+    //
+    // // ==============================================================
+    // // calculate
+    // let start = Instant::now();
+    //
+    // let mut formula_results = FormulaResults::new();
+    //
+    // if !is_summary {
+    //     calculate(target_dates, &mut record_cache, &mut formula_results);
+    // } else {
+    //     calculate_summary(target_dates, &mut record_cache, &mut formula_results);
+    // }
+    //
+    // let end = start.elapsed();
+    // println!("calculate: {}.{:01}秒", end.as_secs(), end.subsec_nanos() / 1_000_000);
+    //
+    // // ==============================================================
+    // // csv output
+    // let start = Instant::now();
+    //
+    // const BASE_PATH: &str = "./output/";
+    //
+    // if let Err(e) = write_to_csv(BASE_PATH.to_string() + "rows.csv", formula_results.row) {
+    //     eprintln!("{}", e)
+    // }
+    // if let Err(e) = write_to_csv(BASE_PATH.to_string() + "budgets.csv", formula_results.budget) {
+    //     eprintln!("{}", e)
+    // }
+    // let end = start.elapsed();
+    // println!("csv output : {}.{:01}秒", end.as_secs(), end.subsec_nanos() / 1_000_000);
 }
