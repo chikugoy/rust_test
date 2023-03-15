@@ -365,6 +365,28 @@ fn write_to_csv(path: String, results: Vec<FormulaResultData>) -> Result<(), Box
     Ok(())
 }
 
+fn write_to_csv_for_test_data(path: String, results: Vec<TestData>) -> Result<(), Box<dyn Error>> {
+    let mut writer = csv::Writer::from_path(&path)?;
+    writer.write_record(&[
+        "row_id",
+        "date",
+        "value",
+        "calculated",
+    ])?;
+
+    for rec in results {
+        writer.write_record(&[
+            &rec.row_id.to_string(),
+            &rec.date.to_string(),
+            &rec.value.to_string(),
+            &rec.calculated.to_string(),
+        ])?;
+    }
+
+    writer.flush()?;
+    Ok(())
+}
+
 fn simple_calculate() {
     use self::schema::tmp_row_pavs::dsl::*;
     let connection = &mut establish_connection();
@@ -396,6 +418,16 @@ fn simple_calculate() {
     let end = start.elapsed();
     println!("tmp row pavs to struct in array : {}.{:01}秒", end.as_secs(), end.subsec_nanos() / 1_000_000);
 
+    const BASE_PATH: &str = "./output/";
+    if let Err(e) = write_to_csv_for_test_data(BASE_PATH.to_string() + "test_data.csv", test_array) {
+        eprintln!("{}", e)
+    }
+
+    let end = start.elapsed();
+    println!("tmp row pavs to csv : {}.{:01}秒", end.as_secs(), end.subsec_nanos() / 1_000_000);
+
+    let start = Instant::now();
+
     let mut test_array_map = HashMap::new();
 
     for rec in &results {
@@ -410,6 +442,8 @@ fn simple_calculate() {
 
     let end = start.elapsed();
     println!("tmp row pavs to struct in hash map : {}.{:01}秒", end.as_secs(), end.subsec_nanos() / 1_000_000);
+
+    let start = Instant::now();
 
     let mut test_array_map: HashMap<String, TestData> = HashMap::new();
 
